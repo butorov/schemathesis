@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import unittest
 import uuid
@@ -58,6 +59,7 @@ def run_test(
     ctx: EngineContext,
     phase: PhaseName,
     suite_id: uuid.UUID,
+    loop: asyncio.AbstractEventLoop = None,
 ) -> events.EventGenerator:
     """A single test run with all error handling needed."""
     import hypothesis.errors
@@ -88,7 +90,7 @@ def run_test(
     try:
         setup_hypothesis_database_key(test_function, operation)
         with catch_warnings(record=True) as warnings, ignore_hypothesis_output():
-            test_function(ctx=ctx, errors=errors, recorder=recorder)
+            test_function(ctx=ctx, errors=errors, recorder=recorder, loop=loop)
         # Test body was not executed at all - Hypothesis did not generate any tests, but there is no error
         status = Status.SUCCESS
     except (SkipTest, unittest.case.SkipTest) as exc:
@@ -237,7 +239,14 @@ def get_invalid_regular_expression_message(warnings: list[WarningMessage]) -> st
 
 
 def cached_test_func(f: Callable) -> Callable:
-    def wrapped(*, ctx: EngineContext, case: Case, errors: list[Exception], recorder: ScenarioRecorder) -> None:
+    def wrapped(
+        *,
+        ctx: EngineContext,
+        case: Case,
+        errors: list[Exception],
+        recorder: ScenarioRecorder,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
         try:
             if ctx.has_to_stop:
                 raise KeyboardInterrupt
@@ -248,14 +257,14 @@ def cached_test_func(f: Callable) -> Callable:
                 elif cached is None:
                     return None
                 try:
-                    f(ctx=ctx, case=case, recorder=recorder)
+                    f(ctx=ctx, case=case, recorder=recorder, loop=loop)
                 except BaseException as exc:
                     ctx.cache_outcome(case, exc)
                     raise
                 else:
                     ctx.cache_outcome(case, None)
             else:
-                f(ctx=ctx, case=case, recorder=recorder)
+                f(ctx=ctx, case=case, recorder=recorder, loop=loop)
         except (KeyboardInterrupt, Failure):
             raise
         except Exception as exc:
@@ -268,10 +277,10 @@ def cached_test_func(f: Callable) -> Callable:
 
 
 @cached_test_func
-def test_func(*, ctx: EngineContext, case: Case, recorder: ScenarioRecorder) -> None:
+def test_func(*, ctx: EngineContext, case: Case, recorder: ScenarioRecorder, loop: asyncio.AbstractEventLoop) -> None:
     recorder.record_case(parent_id=None, transition=None, case=case)
     try:
-        response = case.call(**ctx.transport_kwargs)
+        response = case.call(**ctx.transport_kwargs, loop=loop)
     except (requests.Timeout, requests.ConnectionError) as error:
         if isinstance(error.request, requests.Request):
             recorder.record_request(case_id=case.id, request=error.request.prepare())
@@ -299,8 +308,6 @@ def validate_response(
     continue_on_failure: bool,
     recorder: ScenarioRecorder,
 ) -> None:
-    failures = set()
-
     def on_failure(name: str, collected: set[Failure], failure: Failure) -> None:
         collected.add(failure)
         failure_data = recorder.find_failure_data(parent_id=case.id, failure=failure)

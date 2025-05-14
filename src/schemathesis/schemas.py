@@ -16,7 +16,7 @@ from typing import (
 )
 from urllib.parse import quote, unquote, urljoin, urlparse, urlsplit, urlunsplit
 
-from schemathesis import transport
+from schemathesis import transport as transport_module
 from schemathesis.core import NOT_SET, NotSet
 from schemathesis.core.errors import IncorrectUsage, InvalidSchema
 from schemathesis.core.output import OutputConfig
@@ -106,6 +106,7 @@ class BaseSchema(Mapping):
     base_url: str | None = None
     filter_set: FilterSet = field(default_factory=FilterSet)
     app: Any = None
+    _transport: transport_module.BaseTransport | None = None
     hooks: HookDispatcher = field(default_factory=lambda: HookDispatcher(scope=HookScope.SCHEMA))
     auth: AuthStorage = field(default_factory=AuthStorage)
     test_function: Callable | None = None
@@ -121,8 +122,10 @@ class BaseSchema(Mapping):
         raise NotImplementedError
 
     @property
-    def transport(self) -> transport.BaseTransport:
-        return transport.get(self.app)
+    def transport(self) -> transport_module.BaseTransport:
+        if self._transport is None:
+            self._transport = transport_module.get(self.app)
+        return self._transport
 
     def _repr_pretty_(self, *args: Any, **kwargs: Any) -> None: ...
 
@@ -434,6 +437,7 @@ class BaseSchema(Mapping):
         generation: GenerationConfig | NotSet = NOT_SET,
         output: OutputConfig | NotSet = NOT_SET,
         app: Any | NotSet = NOT_SET,
+        transport: transport_module.BaseTransport | NotSet = NOT_SET,
     ) -> Self:
         if not isinstance(base_url, NotSet):
             if base_url is not None:
@@ -452,6 +456,11 @@ class BaseSchema(Mapping):
             self.output_config = output
         if not isinstance(app, NotSet):
             self.app = app
+        if not isinstance(transport, NotSet):
+            if transport is None:
+                self._transport = None
+            else:  # TODO: check if transport is an ancestor of BaseTransport?
+                self._transport = transport
         return self
 
 

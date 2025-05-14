@@ -11,11 +11,14 @@ from schemathesis.core.errors import SerializationNotPossible
 def get(app: Any) -> BaseTransport:
     """Get transport to send the data to the application."""
     from schemathesis.transport.asgi import ASGI_TRANSPORT
+    from schemathesis.transport.httpx import HTTPX_TRANSPORT
     from schemathesis.transport.requests import REQUESTS_TRANSPORT
     from schemathesis.transport.wsgi import WSGI_TRANSPORT
 
     if app is None:
         return REQUESTS_TRANSPORT
+    elif False:  # TODO
+        return HTTPX_TRANSPORT
     if iscoroutinefunction(app) or (
         hasattr(app, "__call__") and iscoroutinefunction(app.__call__)  # noqa: B004
     ):
@@ -102,3 +105,7 @@ class BaseTransport(Generic[C, R, S]):
             # This media type is set manually. Otherwise, it should have been rejected during the data generation
             raise SerializationNotPossible.for_media_type(input_media_type)
         return pair[1]
+
+    @property
+    def supports_async(self) -> bool:
+        return hasattr(self, "send_async") and iscoroutinefunction(self.send_async)

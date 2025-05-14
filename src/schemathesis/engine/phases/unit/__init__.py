@@ -5,9 +5,11 @@ This module provides high-level flow for single-, and multi-threaded modes.
 
 from __future__ import annotations
 
+import asyncio
 import queue
 import uuid
 import warnings
+from contextlib import closing
 from queue import Queue
 from typing import TYPE_CHECKING, Any
 
@@ -177,13 +179,20 @@ def worker_task(
                         on_error(exc, method=operation.method, path=operation.path)
                         continue
 
-                    # The test is blocking, meaning that even if CTRL-C comes to the main thread, this tasks will continue
-                    # executing. However, as we set a stop event, it will be checked before the next network request.
-                    # However, this is still suboptimal, as there could be slow requests and they will block for longer
-                    for event in run_test(
-                        operation=operation, test_function=test_function, ctx=ctx, phase=phase, suite_id=suite_id
-                    ):
-                        events_queue.put(event)
+                    with closing(asyncio.new_event_loop()) as loop:  # TODO: optional, just for async transports?
+                        asyncio.set_event_loop(loop)
+                        # The test is blocking, meaning that even if CTRL-C comes to the main thread, this tasks will continue
+                        # executing. However, as we set a stop event, it will be checked before the next network request.
+                        # However, this is still suboptimal, as there could be slow requests and they will block for longer
+                        for event in run_test(
+                            operation=operation,
+                            test_function=test_function,
+                            ctx=ctx,
+                            phase=phase,
+                            suite_id=suite_id,
+                            loop=loop,
+                        ):
+                            events_queue.put(event)
                 else:
                     error = result.err()
                     on_error(error, method=error.method, path=error.path)

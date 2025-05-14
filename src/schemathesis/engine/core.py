@@ -106,9 +106,6 @@ class ExecutionPlan:
         yield events.EngineStarted()
         try:
             if engine.is_interrupted:
-                yield from self._finish(engine)
-                return
-            if engine.is_interrupted:
                 yield from self._finish(engine)  # type: ignore[unreachable]
                 return
 

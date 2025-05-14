@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -92,21 +93,27 @@ class Case:
         headers: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         cookies: dict[str, Any] | None = None,
+        loop: asyncio.AbstractEventLoop | None = None,
         **kwargs: Any,
     ) -> Response:
         hook_context = HookContext(operation=self.operation)
         dispatch("before_call", hook_context, self, **kwargs)
         if self.operation.app is not None:
             kwargs["app"] = self.operation.app
-        response = self.operation.schema.transport.send(
-            self,
-            session=session,
-            base_url=base_url,
-            headers=headers,
-            params=params,
-            cookies=cookies,
+
+        send_kwargs = {
+            "session": session,
+            "base_url": base_url,
+            "headers": headers,
+            "params": params,
+            "cookies": cookies,
             **kwargs,
-        )
+        }
+        if self.operation.schema.transport.supports_async and loop is not None:
+            # The asyncio loop is available from WorkerPool or should be created in the user's test code
+            response = loop.run_until_complete(self.operation.schema.transport.send_async(self, **send_kwargs))
+        else:
+            response = self.operation.schema.transport.send(self, **send_kwargs)
         dispatch("after_call", hook_context, self, response)
         return response
 
