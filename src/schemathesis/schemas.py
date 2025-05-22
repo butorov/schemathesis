@@ -106,7 +106,7 @@ class BaseSchema(Mapping):
     base_url: str | None = None
     filter_set: FilterSet = field(default_factory=FilterSet)
     app: Any = None
-    _transport: transport_module.BaseTransport | None = None
+    driver: transport_module.TransportDriver | None = None
     hooks: HookDispatcher = field(default_factory=lambda: HookDispatcher(scope=HookScope.SCHEMA))
     auth: AuthStorage = field(default_factory=AuthStorage)
     test_function: Callable | None = None
@@ -120,12 +120,6 @@ class BaseSchema(Mapping):
     @property
     def specification(self) -> Specification:
         raise NotImplementedError
-
-    @property
-    def transport(self) -> transport_module.BaseTransport:
-        if self._transport is None:
-            self._transport = transport_module.get(self.app)
-        return self._transport
 
     def _repr_pretty_(self, *args: Any, **kwargs: Any) -> None: ...
 
@@ -428,6 +422,9 @@ class BaseSchema(Mapping):
         ]
         return strategies.combine(_strategies)
 
+    def _get_default_driver(self, app) -> transport_module.TransportDriver:
+        return transport_module.TransportDriver(app=app)
+
     def configure(
         self,
         *,
@@ -458,9 +455,9 @@ class BaseSchema(Mapping):
             self.app = app
         if not isinstance(transport, NotSet):
             if transport is None:
-                self._transport = None
+                self.driver = self._get_default_driver(self.app)
             else:  # TODO: check if transport is an ancestor of BaseTransport?
-                self._transport = transport
+                self.driver = transport_module.TransportDriver(transport=transport, app=self.app)
         return self
 
 

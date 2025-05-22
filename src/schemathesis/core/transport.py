@@ -4,6 +4,8 @@ import base64
 import json
 from typing import TYPE_CHECKING, Any, Mapping
 
+import httpx
+
 from schemathesis.core.version import SCHEMATHESIS_VERSION
 
 if TYPE_CHECKING:
@@ -48,7 +50,7 @@ class Response:
         status_code: int,
         headers: Mapping[str, list[str]],
         content: bytes,
-        request: requests.PreparedRequest,
+        request: requests.PreparedRequest | httpx.Request,
         elapsed: float,
         verify: bool,
         message: str = "",

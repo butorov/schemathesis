@@ -45,6 +45,14 @@ def prepare_url(case: Case, base_url: str | None) -> str:
         return unquote(urljoin(base_url, quote(path)))
 
 
+def merge_at(data: dict[str, Any], data_key: str, new: dict[str, Any]) -> None:
+    """Merge the `new` dictionary into the dictionary at `data[data_key]`."""
+    original = data[data_key] or {}
+    for key, value in new.items():
+        original[key] = value
+    data[data_key] = original
+
+
 def prepare_body(case: Case) -> list | dict[str, Any] | str | int | float | bool | bytes | NotSet:
     """Prepare body based on case type."""
     from schemathesis.specs.graphql.schemas import GraphQLSchema
