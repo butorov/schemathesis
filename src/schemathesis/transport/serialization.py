@@ -1,13 +1,55 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from io import StringIO
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Callable
 from unicodedata import normalize
 
 from schemathesis.core.errors import UnboundPrefix
 from schemathesis.core.transforms import deepclone, transform
+from schemathesis.transport import BaseTransport, SerializationContext
+from schemathesis.transport.requests import RequestsTransport
+from schemathesis.transport.wsgi import WSGITransport
+
+
+class SerializersRegistry:
+    """A registry for serializers used in transport drivers.
+
+    Serializers are used to convert Python objects into formats suitable for transport, such as JSON, XML, or YAML.
+    """
+
+    def __init__(self) -> None:
+        # {"transport_class_path": {"media_type": serializer}}
+        self.serializers: Dict[str, Dict[str, Callable]] = defaultdict(dict)
+
+    def _get_class_path(self, transport: BaseTransport) -> str:
+        return f"{transport.__class__.__module__}.{transport.__class__.__name__}"
+
+    def register(self, transports: List[BaseTransport], media_types: list[str], serializer: Callable) -> None:
+        """Register a serializer for a specific media type."""
+        for transport in transports:
+            self.serializers[self._get_class_path(transport)].update(
+                {media_type: serializer for media_type in media_types}
+            )
+
+    def get_serializer(self, transport: BaseTransport, media_type: str) -> Callable | None:
+        """Get a serializer for a specific transport and media type."""
+        class_path = self._get_class_path(transport)
+        if class_path not in self.serializers:
+            return None
+        return self.serializers[class_path].get(media_type)
+
+
+SERIALIZERS_REGISTRY = SerializersRegistry()
+
+
+def json_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
+    return serialize_json(value)
+
+
+SERIALIZERS_REGISTRY.register([RequestsTransport, WSGITransport], ["application/json", "text/json"], json_serializer)
 
 
 @dataclass

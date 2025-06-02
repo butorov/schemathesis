@@ -23,9 +23,9 @@ class WSGITransport(BaseTransport, httpx.WSGITransport): ...
 WSGI_TRANSPORT = WSGITransport()
 
 
-@WSGI_TRANSPORT.serializer("application/json", "text/json")
-def json_serializer(ctx: SerializationContext[Case], value: Any) -> dict[str, Any]:
-    return serialize_json(value)
+# @WSGI_TRANSPORT.serializer("application/json", "text/json")
+# def json_serializer(ctx: SerializationContext[Case], value: Any) -> dict[str, Any]:
+#     return serialize_json(value)
 
 
 @WSGI_TRANSPORT.serializer(

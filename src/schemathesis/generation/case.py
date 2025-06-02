@@ -110,6 +110,32 @@ class Case:
         dispatch("after_call", hook_context, self, response)
         return response
 
+    async def call_async(
+        self,
+        base_url: str | None = None,
+        session: requests.Session | None = None,
+        headers: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        cookies: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Response:
+        """Asynchronous version of `call`."""
+        hook_context = HookContext(operation=self.operation)
+        dispatch("before_call", hook_context, self, **kwargs)
+        if self.operation.app is not None:
+            kwargs["app"] = self.operation.app
+        response = await self.operation.schema.driver.send_async(
+            self,
+            session=session,
+            base_url=base_url,
+            headers=headers,
+            params=params,
+            cookies=cookies,
+            **kwargs,
+        )
+        dispatch("after_call", hook_context, self, response)
+        return response
+
     def validate_response(
         self,
         response: Response,
@@ -179,6 +205,29 @@ class Case:
     ) -> Response:
         __tracebackhide__ = True
         response = self.call(base_url, session, headers, **kwargs)
+        self.validate_response(
+            response,
+            checks,
+            headers=headers,
+            additional_checks=additional_checks,
+            excluded_checks=excluded_checks,
+            transport_kwargs=kwargs,
+        )
+        return response
+
+    async def call_and_validate_async(
+        self,
+        base_url: str | None = None,
+        session: requests.Session | None = None,
+        headers: dict[str, Any] | None = None,
+        checks: list[CheckFunction] | None = None,
+        additional_checks: list[CheckFunction] | None = None,
+        excluded_checks: list[CheckFunction] | None = None,
+        **kwargs: Any,
+    ) -> Response:
+        """Asynchronous version of `call_and_validate`."""
+        __tracebackhide__ = True
+        response = await self.call_async(base_url, session, headers, **kwargs)
         self.validate_response(
             response,
             checks,

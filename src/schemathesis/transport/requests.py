@@ -42,69 +42,6 @@ class RequestsTransport(httpx.BaseTransport):
             response = session.send(session.prepare_request(req))
         return response
 
-    def serialize_case(self, case: Case, **kwargs: Any) -> dict[str, Any]:
-        base_url = kwargs.get("base_url")
-        headers = kwargs.get("headers")
-        params = kwargs.get("params")
-        cookies = kwargs.get("cookies")
-
-        final_headers = prepare_headers(case, headers)
-
-        media_type = case.media_type
-
-        # Set content type header if needed
-        if (
-            media_type
-            and media_type not in ["multipart/form-data", "multipart/mixed"]
-            and not isinstance(case.body, NotSet)
-        ):
-            if "content-type" not in final_headers:
-                final_headers["Content-Type"] = media_type
-
-        url = prepare_url(case, base_url)
-
-        # Handle serialization
-        if not isinstance(case.body, NotSet) and media_type is not None:
-            serializer = self._get_serializer(media_type)
-            context = SerializationContext(case=case)
-            extra = serializer(context, prepare_body(case))
-        else:
-            extra = {}
-
-        if case._auth is not None:
-            extra["auth"] = case._auth
-
-        # Additional headers from serializer
-        additional_headers = extra.pop("headers", None)
-        if additional_headers:
-            for key, value in additional_headers.items():
-                final_headers.setdefault(key, value)
-
-        params = case.query
-
-        # Replace empty dictionaries with empty strings, so the parameters actually present in the query string
-        if any(value == {} for value in (params or {}).values()):
-            params = deepclone(params)
-            for key, value in params.items():
-                if value == {}:
-                    params[key] = ""
-
-        data = {
-            "method": case.method,
-            "url": url,
-            "cookies": case.cookies,
-            "headers": final_headers,
-            "params": params,
-            **extra,
-        }
-
-        if params is not None:
-            merge_at(data, "params", params)
-        if cookies is not None:
-            merge_at(data, "cookies", cookies)
-
-        return data
-
     def send(self, case: Case, *, session: requests.Session | None = None, **kwargs: Any) -> Response:
         import requests
 
@@ -131,34 +68,34 @@ class RequestsTransport(httpx.BaseTransport):
                 session.close()
 
 
-def validate_vanilla_requests_kwargs(data: dict[str, Any]) -> None:
-    """Check arguments for `requests.Session.request`.
-
-    Some arguments can be valid for cases like ASGI integration, but at the same time they won't work for the regular
-    `requests` calls. In such cases we need to avoid an obscure error message, that comes from `requests`.
-    """
-    url = data["url"]
-    if not urlparse(url).netloc:
-        stack = inspect.stack()
-        method_name = "call"
-        for frame in stack[1:]:
-            if frame.function == "call_and_validate":
-                method_name = "call_and_validate"
-                break
-        raise RuntimeError(
-            "The `base_url` argument is required when specifying a schema via a file, so Schemathesis knows where to send the data. \n"
-            f"Pass `base_url` either to the `schemathesis.openapi.from_*` loader or to the `Case.{method_name}`.\n"
-            f"If you use the ASGI integration, please supply your test client "
-            f"as the `session` argument to `call`.\nURL: {url}"
-        )
+# def validate_vanilla_requests_kwargs(data: dict[str, Any]) -> None:
+#     """Check arguments for `requests.Session.request`.
+#
+#     Some arguments can be valid for cases like ASGI integration, but at the same time they won't work for the regular
+#     `requests` calls. In such cases we need to avoid an obscure error message, that comes from `requests`.
+#     """
+#     url = data["url"]
+#     if not urlparse(url).netloc:
+#         stack = inspect.stack()
+#         method_name = "call"
+#         for frame in stack[1:]:
+#             if frame.function == "call_and_validate":
+#                 method_name = "call_and_validate"
+#                 break
+#         raise RuntimeError(
+#             "The `base_url` argument is required when specifying a schema via a file, so Schemathesis knows where to send the data. \n"
+#             f"Pass `base_url` either to the `schemathesis.openapi.from_*` loader or to the `Case.{method_name}`.\n"
+#             f"If you use the ASGI integration, please supply your test client "
+#             f"as the `session` argument to `call`.\nURL: {url}"
+#         )
 
 
 REQUESTS_TRANSPORT = RequestsTransport()
 
 
-@REQUESTS_TRANSPORT.serializer("application/json", "text/json")
-def json_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
-    return serialize_json(value)
+# @REQUESTS_TRANSPORT.serializer("application/json", "text/json")
+# def json_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
+#     return serialize_json(value)
 
 
 @REQUESTS_TRANSPORT.serializer(

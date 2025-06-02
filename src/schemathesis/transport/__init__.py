@@ -73,7 +73,13 @@ class TransportDriver:
         finally:
             if _client is None:
                 client.close()
-        return self.httpx_response_to_response(response, verify=kwargs.get("verify", True))
+        return self.httpx_response_to_schemathesis_response(response, verify=kwargs.get("verify", True))
+
+    async def send_async(self, case: Case, _client: httpx.AsyncClient | None = None, **kwargs: Any) -> Response:
+        """Asynchronously send the case using this transport."""
+        ...
+        response = await client.send(**self.case_to_request(case, **kwargs))
+        ...
 
     def case_to_request(
         self, case: Case, transport: httpx.BaseTransport, **kwargs: Any
@@ -99,7 +105,7 @@ class TransportDriver:
 
         # Handle serialization
         if not isinstance(case.body, NotSet) and media_type is not None:
-            serializer = transport._get_serializer(media_type)
+            serializer = transport._get_serializer(media_type)  # TODO: use SERIALIZERS_REGISTRY
             context = SerializationContext(case=case)
             extra = serializer(context, prepare_body(case))
         else:
@@ -129,7 +135,7 @@ class TransportDriver:
 
         return result
 
-    def httpx_response_to_response(self, response: httpx.Response, verify: bool) -> Response:
+    def httpx_response_to_schemathesis_response(self, response: httpx.Response, verify: bool) -> Response:
         """Convert the httpx response to the Schemathesis response."""
         return Response(
             status_code=response.status_code,
