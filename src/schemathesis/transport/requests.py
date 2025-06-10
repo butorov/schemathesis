@@ -1,27 +1,19 @@
 from __future__ import annotations
 
 import binascii
-import inspect
 import os
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 import httpx
-from httpx import Request, Response
+from httpx import ASGITransport, Request, Response, WSGITransport
 
-from schemathesis.core import NotSet
-from schemathesis.core.rate_limit import ratelimit
 from schemathesis.core.transforms import deepclone
-from schemathesis.core.transport import DEFAULT_RESPONSE_TIMEOUT
-from schemathesis.transport import BaseTransport, SerializationContext
-from schemathesis.transport.prepare import prepare_body, prepare_headers, prepare_url, merge_at
-from schemathesis.transport.serialization import Binary, serialize_binary, serialize_json, serialize_xml, serialize_yaml
+from schemathesis.transport import SerializationContext
+from schemathesis.transport.serialization import SERIALIZERS_REGISTRY, Binary, serialize_binary, serialize_xml
 
 if TYPE_CHECKING:
     import requests
-
-    from schemathesis.generation.case import Case
 
 
 class RequestsTransport(httpx.BaseTransport):
@@ -42,67 +34,8 @@ class RequestsTransport(httpx.BaseTransport):
             response = session.send(session.prepare_request(req))
         return response
 
-    def send(self, case: Case, *, session: requests.Session | None = None, **kwargs: Any) -> Response:
-        import requests
-
-        data = self.serialize_case(case, **kwargs)
-        kwargs.pop("base_url", None)
-        data.update({key: value for key, value in kwargs.items() if key not in data})
-        data.setdefault("timeout", DEFAULT_RESPONSE_TIMEOUT)
-
-        if session is None:
-            validate_vanilla_requests_kwargs(data)
-            session = requests.Session()
-            close_session = True
-        else:
-            close_session = False
-
-        verify = data.get("verify", True)
-
-        try:
-            with ratelimit(case.operation.schema.rate_limiter, case.operation.schema.base_url):
-                response = session.request(**data)  # type: ignore
-            return Response.from_requests(response, verify=verify)
-        finally:
-            if close_session:
-                session.close()
-
-
-# def validate_vanilla_requests_kwargs(data: dict[str, Any]) -> None:
-#     """Check arguments for `requests.Session.request`.
-#
-#     Some arguments can be valid for cases like ASGI integration, but at the same time they won't work for the regular
-#     `requests` calls. In such cases we need to avoid an obscure error message, that comes from `requests`.
-#     """
-#     url = data["url"]
-#     if not urlparse(url).netloc:
-#         stack = inspect.stack()
-#         method_name = "call"
-#         for frame in stack[1:]:
-#             if frame.function == "call_and_validate":
-#                 method_name = "call_and_validate"
-#                 break
-#         raise RuntimeError(
-#             "The `base_url` argument is required when specifying a schema via a file, so Schemathesis knows where to send the data. \n"
-#             f"Pass `base_url` either to the `schemathesis.openapi.from_*` loader or to the `Case.{method_name}`.\n"
-#             f"If you use the ASGI integration, please supply your test client "
-#             f"as the `session` argument to `call`.\nURL: {url}"
-#         )
-
 
 REQUESTS_TRANSPORT = RequestsTransport()
-
-
-# @REQUESTS_TRANSPORT.serializer("application/json", "text/json")
-# def json_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
-#     return serialize_json(value)
-
-
-@REQUESTS_TRANSPORT.serializer(
-    "text/yaml", "text/x-yaml", "text/vnd.yaml", "text/yml", "application/yaml", "application/x-yaml"
-)
-def yaml_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
-    return serialize_yaml(value)
 
 
 def _should_coerce_to_bytes(item: Any) -> bool:
@@ -146,7 +79,6 @@ def _encode_multipart(value: Any, boundary: str) -> bytes:
     return body.getvalue()
 
 
-@REQUESTS_TRANSPORT.serializer("multipart/form-data", "multipart/mixed")
 def multipart_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
     if isinstance(value, bytes):
         return {"data": value}
@@ -162,7 +94,11 @@ def multipart_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any
     return {"data": raw_data, "headers": {"Content-Type": content_type}}
 
 
-@REQUESTS_TRANSPORT.serializer("application/xml", "text/xml")
+SERIALIZERS_REGISTRY.register(
+    [RequestsTransport, ASGITransport], ["multipart/form-data", "multipart/mixed"], multipart_serializer
+)
+
+
 def xml_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
     media_type = ctx.case.media_type
 
@@ -174,18 +110,35 @@ def xml_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
     return serialize_xml(value, raw_schema, resolved_schema)
 
 
-@REQUESTS_TRANSPORT.serializer("application/x-www-form-urlencoded")
+SERIALIZERS_REGISTRY.register(
+    [RequestsTransport, ASGITransport, WSGITransport], ["application/xml", "text/xml"], xml_serializer
+)
+
+
 def urlencoded_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
     return {"data": value}
 
 
-@REQUESTS_TRANSPORT.serializer("text/plain")
+SERIALIZERS_REGISTRY.register(
+    [RequestsTransport, ASGITransport, WSGITransport], ["application/x-www-form-urlencoded"], urlencoded_serializer
+)
+
+
 def text_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
     if isinstance(value, bytes):
         return {"data": value}
-    return {"data": str(value).encode("utf8")}
+    return {
+        "data": str(value).encode("utf8")
+    }  # TODO: check if not collapse with schemathesis.transport.wsgi.text_serializer
 
 
-@REQUESTS_TRANSPORT.serializer("application/octet-stream")
+SERIALIZERS_REGISTRY.register([RequestsTransport, ASGITransport], ["text/plain"], text_serializer)
+
+
 def binary_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
     return {"data": serialize_binary(value)}
+
+
+SERIALIZERS_REGISTRY.register(
+    [RequestsTransport, ASGITransport, WSGITransport], ["application/octet-stream"], binary_serializer
+)

@@ -4,16 +4,21 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from io import StringIO
-from typing import Any, Dict, List, Union, Callable
+from typing import Any, Callable, Dict, Iterator, List, Union
 from unicodedata import normalize
 
-from schemathesis.core.errors import UnboundPrefix
+from httpx import ASGITransport, BaseTransport, WSGITransport
+
+from schemathesis.core import media_types
+from schemathesis.core.errors import SerializationNotPossible, UnboundPrefix
 from schemathesis.core.transforms import deepclone, transform
-from schemathesis.transport import BaseTransport, SerializationContext
+from schemathesis.transport import SerializationContext
 from schemathesis.transport.requests import RequestsTransport
-from schemathesis.transport.wsgi import WSGITransport
+
+Serializer = Callable[[SerializationContext, Any], Any]
 
 
+# TODO: do we need `unregister_serializer()` method?
 class SerializersRegistry:
     """A registry for serializers used in transport drivers.
 
@@ -30,16 +35,40 @@ class SerializersRegistry:
     def register(self, transports: List[BaseTransport], media_types: list[str], serializer: Callable) -> None:
         """Register a serializer for a specific media type."""
         for transport in transports:
-            self.serializers[self._get_class_path(transport)].update(
-                {media_type: serializer for media_type in media_types}
-            )
+            self.serializers[self._get_class_path(transport)].update(dict.fromkeys(media_types, serializer))
 
     def get_serializer(self, transport: BaseTransport, media_type: str) -> Callable | None:
         """Get a serializer for a specific transport and media type."""
-        class_path = self._get_class_path(transport)
-        if class_path not in self.serializers:
-            return None
-        return self.serializers[class_path].get(media_type)
+        matched_type_serializer_pair = self.get_first_matching_media_type(transport, media_type)
+        if matched_type_serializer_pair is None:
+            raise SerializationNotPossible.for_media_type(media_type)
+        return matched_type_serializer_pair[1]
+
+    def get_first_matching_media_type(self, transport: BaseTransport, media_type: str) -> tuple[str, Serializer] | None:
+        return next(self.get_matching_media_types(transport, media_type), None)
+
+    def get_matching_media_types(self, transport: BaseTransport, media_type: str) -> Iterator[tuple[str, Serializer]]:
+        """Get all registered media types matching the given media type."""
+        media_type_serializer_pairs = self.serializers.get(self._get_class_path(transport), {}).items()
+        if media_type == "*/*":
+            for registered_media_type, serializer in media_type_serializer_pairs:
+                yield registered_media_type, serializer
+        else:
+            main, sub = media_types.parse(media_type)
+            checks = [
+                media_types.is_json,
+                media_types.is_xml,
+                media_types.is_plain_text,
+                media_types.is_yaml,
+            ]
+            for registered_media_type, serializer in media_type_serializer_pairs:
+                # Try known variations for popular media types and fallback to comparison
+                if any(check(media_type) and check(registered_media_type) for check in checks):
+                    yield media_type, serializer
+                else:
+                    target_main, target_sub = media_types.parse(registered_media_type)
+                    if main in ("*", target_main) and sub in ("*", target_sub):
+                        yield registered_media_type, serializer
 
 
 SERIALIZERS_REGISTRY = SerializersRegistry()
@@ -49,7 +78,20 @@ def json_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
     return serialize_json(value)
 
 
-SERIALIZERS_REGISTRY.register([RequestsTransport, WSGITransport], ["application/json", "text/json"], json_serializer)
+SERIALIZERS_REGISTRY.register(
+    [RequestsTransport, WSGITransport, ASGITransport], ["application/json", "text/json"], json_serializer
+)
+
+
+def yaml_serializer(ctx: SerializationContext, value: Any) -> dict[str, Any]:
+    return serialize_yaml(value)
+
+
+SERIALIZERS_REGISTRY.register(
+    [RequestsTransport, WSGITransport, ASGITransport],
+    ["text/yaml", "text/x-yaml", "text/vnd.yaml", "text/yml", "application/yaml", "application/x-yaml"],
+    yaml_serializer,
+)
 
 
 @dataclass

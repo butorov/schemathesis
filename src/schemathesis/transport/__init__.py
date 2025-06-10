@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from inspect import iscoroutinefunction
-from typing import Any, Callable, Iterator, TypeVar, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
 from httpx import Request
 from httpx._types import AuthTypes
 
-from schemathesis.core import media_types, NotSet
+from schemathesis.core import NotSet
 from schemathesis.core.transforms import deepclone
 from schemathesis.core.transport import Response
-from schemathesis.core.errors import SerializationNotPossible
-from schemathesis.transport.prepare import prepare_headers, prepare_url, prepare_body
+from schemathesis.transport.prepare import prepare_body, prepare_headers, prepare_url
+from schemathesis.transport.requests import RequestsTransport
+from schemathesis.transport.serialization import SERIALIZERS_REGISTRY
 
 if TYPE_CHECKING:
     from schemathesis.generation.case import Case
@@ -20,7 +21,6 @@ if TYPE_CHECKING:
 
 def get(app: Any):
     """Get transport to send the data to the application."""
-
     if app is None:
         return RequestsTransport
     if iscoroutinefunction(app) or (
@@ -42,9 +42,6 @@ class SerializationContext:
     __slots__ = ("case",)
 
 
-Serializer = Callable[[SerializationContext, Any], Any]
-
-
 class TransportDriver:
     """Base class for transport drivers."""
 
@@ -63,7 +60,6 @@ class TransportDriver:
 
     def send(self, case: Case, _client: httpx.Client | None = None, **kwargs: Any) -> Response:
         """Send the case using this transport."""
-
         client = _client or httpx.Client(transport=self.get_initialized_transport(**kwargs))
 
         # TODO: ratelimiting
@@ -77,9 +73,11 @@ class TransportDriver:
 
     async def send_async(self, case: Case, _client: httpx.AsyncClient | None = None, **kwargs: Any) -> Response:
         """Asynchronously send the case using this transport."""
+        client = _client or httpx.Client(transport=self.get_initialized_transport(**kwargs))
         ...
         response = await client.send(**self.case_to_request(case, **kwargs))
         ...
+        return self.httpx_response_to_schemathesis_response(response, verify=kwargs.get("verify", True))
 
     def case_to_request(
         self, case: Case, transport: httpx.BaseTransport, **kwargs: Any
@@ -105,9 +103,9 @@ class TransportDriver:
 
         # Handle serialization
         if not isinstance(case.body, NotSet) and media_type is not None:
-            serializer = transport._get_serializer(media_type)  # TODO: use SERIALIZERS_REGISTRY
+            serializer_func = SERIALIZERS_REGISTRY.get_serializer(self._transport, media_type)
             context = SerializationContext(case=case)
-            extra = serializer(context, prepare_body(case))
+            extra = serializer_func(context, prepare_body(case))
         else:
             extra = {}
 
@@ -132,6 +130,7 @@ class TransportDriver:
             cookies=cookies,
             **extra,
         )
+        # TODO: add Override-object support
 
         return result
 
@@ -148,60 +147,3 @@ class TransportDriver:
             http_version=response.http_version,
             verify=verify,
         )
-
-
-class BaseTransport(httpx.BaseTransport):
-    """Base implementation with serializer registration."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        self._serializers: dict[str, Serializer] = {}  # TODO: rethink to avoid overriding init
-        super().__init__(*args, **kwargs)
-
-    def serializer(self, *media_types: str) -> Callable[[Serializer], Serializer]:
-        """Register a serializer for given media types."""
-
-        def decorator(func: Serializer) -> Serializer:
-            for media_type in media_types:
-                self._serializers[media_type] = func
-            return func
-
-        return decorator
-
-    def unregister_serializer(self, *media_types: str) -> None:
-        for media_type in media_types:
-            self._serializers.pop(media_type, None)
-
-    def _copy_serializers_from(self, transport: BaseTransport) -> None:
-        self._serializers.update(transport._serializers)
-
-    def get_first_matching_media_type(self, media_type: str) -> tuple[str, Serializer] | None:
-        return next(self.get_matching_media_types(media_type), None)
-
-    def get_matching_media_types(self, media_type: str) -> Iterator[tuple[str, Serializer]]:
-        """Get all registered media types matching the given media type."""
-        if media_type == "*/*":
-            # Shortcut to avoid comparing all values
-            yield from iter(self._serializers.items())
-        else:
-            main, sub = media_types.parse(media_type)
-            checks = [
-                media_types.is_json,
-                media_types.is_xml,
-                media_types.is_plain_text,
-                media_types.is_yaml,
-            ]
-            for registered_media_type, serializer in self._serializers.items():
-                # Try known variations for popular media types and fallback to comparison
-                if any(check(media_type) and check(registered_media_type) for check in checks):
-                    yield media_type, serializer
-                else:
-                    target_main, target_sub = media_types.parse(registered_media_type)
-                    if main in ("*", target_main) and sub in ("*", target_sub):
-                        yield registered_media_type, serializer
-
-    def _get_serializer(self, input_media_type: str) -> Serializer:
-        pair = self.get_first_matching_media_type(input_media_type)
-        if pair is None:
-            # This media type is set manually. Otherwise, it should have been rejected during the data generation
-            raise SerializationNotPossible.for_media_type(input_media_type)
-        return pair[1]
